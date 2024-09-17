@@ -1,0 +1,7 @@
+markdown==3.4.3
+Pillow==9.5.0
+reportlab==3.6.12
+PyQt5==5.15.9
+weasyprint==59.0
+emoji==2.2.0
+requests==2.31.0

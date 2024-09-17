@@ -51,3 +51,7 @@ PDF files that accurately render:
 • If emoji rendering fails, replace with a placeholder and notify the user.
 • In case of token limit constraints, break down the conversion process into smaller, manageable chunks and request user input for continuation.
 </safeguards>
+
+<constraints>
+All code generated must be compatible with Python version 3.12.4
+</constraints>
