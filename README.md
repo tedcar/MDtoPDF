@@ -1,4 +1,4 @@
-# Markdown to PDF Converter
+# Markdown to PDF Converter :)
 
 This application converts Markdown files to PDF format with support for emojis, local images, and online images.
 
