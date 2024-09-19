@@ -1,0 +1,56 @@
+# Python virtual environment
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Cursor-specific files
+.cursorrules
+
+# Project-specific folders
+MD 2 PDF/
+
+# Remove or comment out the following line to stop ignoring .gitignore
+# .gitignore
+
+# Other common files to ignore
+.DS_Store
+Thumbs.db
+
+# Python bytecode
+*.py[cod]
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo

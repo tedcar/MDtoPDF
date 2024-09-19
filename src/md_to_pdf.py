@@ -16,6 +16,9 @@ from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
 from PIL import Image as PILImage
 import re
+import multiprocessing
+import psutil
+from styling import get_bible_style, get_page_layout
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -83,60 +86,9 @@ def convert_md_to_pdf(input_file, output_file, progress_callback=None, error_cal
 
 def create_pdf_with_reportlab(html_content, output_file):
     try:
-        doc = SimpleDocTemplate(output_file, pagesize=letter, 
-                                rightMargin=72, leftMargin=72, 
-                                topMargin=72, bottomMargin=18)
-        styles = getSampleStyleSheet()
-        custom_styles = {}
-        
-        # Define CustomBody style
-        if 'SegoeUIEmoji' in pdfmetrics.getRegisteredFontNames():
-            custom_body_style = ParagraphStyle(
-                name='CustomBody', 
-                fontName='SegoeUIEmoji', 
-                fontSize=12,  # Increased font size for better visibility
-                leading=16,    # Increased leading for better readability
-                spaceAfter=12
-            )
-        else:
-            custom_body_style = ParagraphStyle(
-                name='CustomBody', 
-                fontName='Helvetica', 
-                fontSize=12,  # Increased font size
-                leading=16,    # Increased leading
-                spaceAfter=12
-            )
-        styles.add(custom_body_style)
-        custom_styles['CustomBody'] = custom_body_style
-        
-        # Define CustomHeading1 to CustomHeading6 styles
-        for i in range(1, 7):
-            style_name = f'CustomHeading{i}'
-            styles.add(ParagraphStyle(
-                name=style_name,
-                parent=styles['Heading1'],
-                fontName='Helvetica-Bold',
-                fontSize=20 - (i-1)*2,  # Further increased font sizes
-                leading=24 - (i-1)*2,
-                spaceAfter=12
-            ))
-            custom_styles[style_name] = styles[style_name]
-        
-        # Define CustomCode style
-        styles.add(ParagraphStyle(
-            name='CustomCode',
-            fontName='Courier',
-            fontSize=10,
-            leading=12,
-            spaceAfter=12
-        ))
-        custom_styles['CustomCode'] = styles['CustomCode']
-        
-        # Add border around content
-        from reportlab.lib import colors
-        from reportlab.platypus import Frame, PageTemplate
-        
+        doc = SimpleDocTemplate(output_file, pagesize=letter, **get_page_layout())
         story = []
+        bible_style = get_bible_style()
     
         soup = BeautifulSoup(html_content, 'html.parser')
         for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'pre', 'code']):
@@ -167,7 +119,7 @@ def create_pdf_with_reportlab(html_content, output_file):
                     style_name = 'CustomBody'
                 style = styles.get(style_name, styles['CustomBody'])
                 text = element.get_text()
-                story.append(Paragraph(text, style))
+                story.append(Paragraph(text, bible_style))
                 if element.name.startswith('h'):
                     story.append(Spacer(1, 6))
                 else:
