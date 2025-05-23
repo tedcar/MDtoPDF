@@ -18,7 +18,9 @@ from PIL import Image as PILImage
 import re
 import multiprocessing
 import psutil
-from styling import get_bible_style, get_page_layout
+from .styling import get_all_styles, get_page_layout # Updated import
+from reportlab.platypus import Frame, PageTemplate # Added for existing code
+from reportlab.lib import colors # Added for add_border (though not directly used by create_pdf_with_reportlab styling)
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -67,14 +69,20 @@ def convert_md_to_pdf(input_file, output_file, progress_callback=None, error_cal
         if wkhtmltopdf_path:
             config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
             pdfkit.from_string(html_content, output_file, configuration=config)
+            logger.info(f"Successfully converted {input_file} to {output_file} using wkhtmltopdf")
+            if progress_callback:
+                progress_callback(100)
         else:
-            logger.error("wkhtmltopdf not found. Please install it for better PDF conversion results.")
-            if error_callback:
-                error_callback("wkhtmltopdf is not installed. Please install it to enhance PDF conversion quality.")
+            logger.info("wkhtmltopdf not found. Falling back to ReportLab for PDF conversion.")
+            if progress_callback:
+                progress_callback(50)  # Indicate fallback and partial progress
+            
+            create_pdf_with_reportlab(html_content, output_file) # Fallback to ReportLab
+            
+            logger.info(f"Successfully converted {input_file} to {output_file} using ReportLab")
+            if progress_callback:
+                progress_callback(100)
         
-        logger.info(f"Successfully converted {input_file} to {output_file}")
-        if progress_callback:
-            progress_callback(100)
         return output_file
     except Exception as e:
         logger.error(f"Error converting {input_file} to PDF: {e}")
@@ -86,64 +94,164 @@ def convert_md_to_pdf(input_file, output_file, progress_callback=None, error_cal
 
 def create_pdf_with_reportlab(html_content, output_file):
     try:
+        all_styles = get_all_styles()
+        default_style = all_styles['Normal']
+        
         doc = SimpleDocTemplate(output_file, pagesize=letter, **get_page_layout())
         story = []
-        bible_style = get_bible_style()
     
         soup = BeautifulSoup(html_content, 'html.parser')
-        for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'pre', 'code']):
-            if element.name == 'img':
+        # Updated find_all to include more tags as per plan
+        for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'pre', 'ul', 'ol', 'blockquote', 'hr', 'table']):
+            tag_name = element.name
+
+            if tag_name == 'p':
+                # Check if the paragraph solely contains an image
+                img_children = [child for child in element.children if child.name == 'img']
+                # Consider a paragraph to be "image-only" if it has one img child and other children are just whitespace
+                non_img_children_significant = [child for child in element.children if child.name != 'img' and str(child).strip()]
+
+                if len(img_children) == 1 and not non_img_children_significant:
+                    img_element = img_children[0]
+                    img_data = process_image(img_element.get('src'))
+                    if img_data:
+                        try:
+                            img = Image(BytesIO(img_data))
+                            img_pil = PILImage.open(BytesIO(img_data))
+                            img_width_pil, img_height_pil = img_pil.size
+                            aspect = img_height_pil / float(img_width_pil)
+                            max_img_width = doc.width
+                            img.drawWidth = min(img_width_pil, max_img_width)
+                            img.drawHeight = img.drawWidth * aspect
+                            story.append(img)
+                            story.append(Spacer(1, 12))
+                        except Exception as e:
+                            logger.error(f"Failed to add image (from p-tag) to PDF: {e}")
+                else:
+                    # For mixed content paragraphs, parse to remove unsupported img attributes like 'alt'
+                    paragraph_html_content = element.decode_contents()
+                    temp_soup = BeautifulSoup(paragraph_html_content, 'html.parser')
+                    for img_tag in temp_soup.find_all('img'):
+                        if img_tag.get('src', '').startswith(('http://', 'https://')):
+                            # ReportLab's Paragraph does not fetch remote images.
+                            # Replace with placeholder text or modify src to a downloaded version if implemented.
+                            # For now, replace the img tag with a text placeholder to prevent error.
+                            original_src = img_tag['src']
+                            placeholder_text = f"[Remote Image: {original_src} placeholder]"
+                            # Create a new text node from the placeholder_text
+                            # We need to use the new_string method of the *original* soup object that created the tag
+                            # or a new soup object if we are replacing within a string context.
+                            # Since temp_soup is its own parsed object, we can use its new_string.
+                            img_tag.replace_with(temp_soup.new_string(placeholder_text))
+                            logger.info(f"Replaced remote image '{original_src}' in paragraph with placeholder text.")
+                        else: # For local images, just ensure problematic attributes are removed
+                            if 'alt' in img_tag.attrs:
+                                del img_tag['alt']
+                            if 'style' in img_tag.attrs:
+                                del img_tag['style']
+                    
+                    story.append(Paragraph(str(temp_soup), all_styles.get('Normal', default_style)))
+                    story.append(Spacer(1, 6)) # Reduced spacer after paragraphs
+            elif tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                style_name = tag_name.upper() # H1, H2, H3
+                if style_name not in ['H1', 'H2', 'H3']: # Fallback for H4-H6
+                    style_name = 'H3' 
+                style = all_styles.get(style_name, default_style)
+                story.append(Paragraph(element.decode_contents(), style))
+                story.append(Spacer(1, style.spaceBefore / 2 if hasattr(style, 'spaceBefore') else 6)) # Spacer based on style
+                if tag_name == 'h1':
+                    story.append(PageBreak())
+            elif tag_name == 'img':
                 img_data = process_image(element['src'])
-                if img_data:
+                if img_data: # This is for direct img tags, not img within p
                     try:
                         img = Image(BytesIO(img_data))
-                        img_width, img_height = PILImage.open(BytesIO(img_data)).size
-                        aspect = img_height / float(img_width)
-                        img.drawWidth = 6*inch
-                        img.drawHeight = 6*inch * aspect
+                        img_pil = PILImage.open(BytesIO(img_data))
+                        img_width_pil, img_height_pil = img_pil.size
+                        aspect = img_height_pil / float(img_width_pil)
+                        max_img_width = doc.width
+                        img.drawWidth = min(img_width_pil, max_img_width)
+                        img.drawHeight = img.drawWidth * aspect
                         story.append(img)
                         story.append(Spacer(1, 12))
                     except Exception as e:
-                        logger.error(f"Failed to add image to PDF: {e}")
-                        show_error_message(f"Failed to add image to PDF: {e}")
-            elif element.name in ['pre', 'code']:
-                style = styles.get('CustomCode', styles['Normal'])
-                text = element.get_text()
-                story.append(Paragraph(text, style))
+                        logger.error(f"Failed to add direct image to PDF: {e}")
+            elif tag_name == 'pre':
+                code_element = element.find('code')
+                text = code_element.get_text(strip=True) if code_element else element.get_text(strip=True)
+                story.append(Paragraph(text, all_styles.get('Code', default_style)))
                 story.append(Spacer(1, 12))
-            else:
-                if element.name.startswith('h') and len(element.name) == 2 and element.name[1].isdigit():
-                    heading_level = int(element.name[1])
-                    style_name = f'CustomHeading{heading_level}'
-                else:
-                    style_name = 'CustomBody'
-                style = styles.get(style_name, styles['CustomBody'])
-                text = element.get_text()
-                story.append(Paragraph(text, bible_style))
-                if element.name.startswith('h'):
-                    story.append(Spacer(1, 6))
-                else:
-                    story.append(Spacer(1, 12))
-    
-            # Add page break after h1 elements
-            if element.name == 'h1':
-                story.append(PageBreak())
+            elif tag_name == 'ul':
+                for li in element.find_all('li', recursive=False):
+                    bullet_text = f"• {li.decode_contents()}"
+                    story.append(Paragraph(bullet_text, all_styles.get('Bullet', default_style)))
+                    story.append(Spacer(1, 2)) # Tighter spacing for list items
+                story.append(Spacer(1, 6)) # Space after list
+            elif tag_name == 'ol':
+                ol_counter = 1
+                for li in element.find_all('li', recursive=False):
+                    numbered_text = f"{ol_counter}. {li.decode_contents()}"
+                    story.append(Paragraph(numbered_text, all_styles.get('ListItem', default_style)))
+                    story.append(Spacer(1, 2)) # Tighter spacing for list items
+                    ol_counter += 1
+                story.append(Spacer(1, 6)) # Space after list
+            elif tag_name == 'blockquote':
+                # Process each paragraph within the blockquote
+                inner_paragraphs = element.find_all('p')
+                if inner_paragraphs:
+                    for p_element in inner_paragraphs:
+                        story.append(Paragraph(p_element.decode_contents(), all_styles.get('Blockquote', default_style)))
+                        story.append(Spacer(1, 3)) 
+                else: # If no <p> tags, process the whole content
+                    story.append(Paragraph(element.decode_contents(), all_styles.get('Blockquote', default_style)))
+                story.append(Spacer(1, 6))
+            elif tag_name == 'hr':
+                story.append(Spacer(1, 24)) # Use a larger spacer for hr
+            elif tag_name == 'table':
+                logger.warning("HTML tables are not supported in ReportLab PDF conversion and will be skipped.")
+                # Optionally, add a placeholder paragraph:
+                # story.append(Paragraph("[Table content skipped]", default_style))
+                # story.append(Spacer(1, 12))
+
+        # The Frame and PageTemplate part for borders - keep as is for now
+        # This might need adjustment if 'add_border' or related functionality is broken
+        # or if these ReportLab components are not correctly imported/defined.
+        # For now, the focus is on content styling.
+        # Ensure 'Frame' and 'PageTemplate' are imported if this part is to be kept.
+        # It seems `add_border` is defined below and uses `colors` which needs to be imported.
+        # `Frame` and `PageTemplate` are not standard Python types, they come from ReportLab.
         
-        # Create a frame with border
-        frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
-        template = PageTemplate(id='with_border', frames=[frame],
-                                onPage=add_border)
-        doc.addPageTemplates([template])
-        
+        # Example of how it was:
+        # frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
+        # template = PageTemplate(id='with_border', frames=[frame], onPage=add_border)
+        # doc.addPageTemplates([template])
+        # This part is kept from the original, assuming Frame, PageTemplate, add_border are available.
+        # If `add_border` is not defined or `Frame`/`PageTemplate` are not imported, this will error.
+        # The current task is styling, so this structure is maintained.
+        # `add_border` itself is defined later in the file.
+        # `Frame` and `PageTemplate` are typically imported from `reportlab.platypus`.
+        # `colors` is typically imported from `reportlab.lib.colors`.
+
+        # The following lines for frame and template are from the original code.
+        # If `add_border` is not used or `Frame`/`PageTemplate` are not properly imported,
+        # these could be removed or commented out.
+        # For now, retaining them as the subtask is about style application.
+        if 'Frame' in globals() and 'PageTemplate' in globals() and callable(globals().get('add_border')):
+             frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
+             template = PageTemplate(id='with_border', frames=[frame], onPage=add_border)
+             doc.addPageTemplates([template])
+        else:
+             logger.warning("Frame, PageTemplate, or add_border not fully available. Skipping page border.")
+
         doc.build(story)
         logger.info("ReportLab PDF creation succeeded.")
     except KeyError as ke:
         missing_style = ke.args[0].split("'")[1]
         logger.error(f"Style '{missing_style}' not found in stylesheet.")
-        show_error_message(f"Style '{missing_style}' not found in stylesheet.")
+        raise # Re-raise the KeyError
     except Exception as e:
         logger.error(f"Error creating PDF with ReportLab: {e}")
-        show_error_message(f"Error creating PDF: {e}")
+        raise # Re-raise the exception
 
 def process_image(src):
     logger.info(f"Processing image: {src}")
@@ -189,12 +297,3 @@ def add_border(canvas, doc):
     canvas.setLineWidth(border_width)
     canvas.rect(doc.leftMargin, doc.bottomMargin, doc.width, doc.height)
     canvas.restoreState()
-
-# GUI-related functions (implement in gui.py)
-def show_error_message(message):
-    # Implement this function in gui.py to show error messages in the GUI
-    pass
-
-def update_progress_bar(value):
-    # Implement this function in gui.py to update the progress bar
-    pass
