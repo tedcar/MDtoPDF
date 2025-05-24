@@ -18,7 +18,7 @@ from PIL import Image as PILImage
 import re
 import multiprocessing
 import psutil
-from .styling import get_all_styles, get_page_layout # Updated import
+from styling import get_all_styles, get_page_layout # Updated import
 from reportlab.platypus import Frame, PageTemplate # Added for existing code
 from reportlab.lib import colors # Added for add_border (though not directly used by create_pdf_with_reportlab styling)
 
