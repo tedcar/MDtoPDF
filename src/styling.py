@@ -5,7 +5,7 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 import os
-from .utils import resource_path # Import resource_path
+from utils import resource_path # Import resource_path
 
 # Font Registration
 # Use resource_path to get the path to TimesNewRoman.ttf
